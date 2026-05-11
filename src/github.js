@@ -3,8 +3,7 @@
 // ============================================================
 // El token de GitHub se pide al admin al momento de actualizar.
 // Los datos quedan en public/data.json y todos los usuarios los leen.
-
-const REPO_OWNER = 'papo2716'
+const REPO_OWNER = 'pami-apps'  // ← REEMPLAZA CON TU USUARIO
 const REPO_NAME  = 'buscador-insumos'
 const FILE_PATH  = 'public/data.json'
 
