@@ -1,4 +1,4 @@
-// ============================================================
+javascript// ============================================================
 // API: Actualizar datos (solo admin) - con GZIP
 // Endpoint: POST /api/actualizar
 // ============================================================
@@ -52,19 +52,16 @@ async function subirAGitHub(contenidoBuffer) {
     'Content-Type': 'application/json',
   };
   
-  // 1. Obtener SHA del último commit
   const refRes = await fetch(`${baseUrl}/git/refs/heads/${BRANCH}`, { headers });
   if (!refRes.ok) throw new Error(`Error al obtener ref: ${refRes.status}`);
   const refData = await refRes.json();
   const latestCommitSha = refData.object.sha;
   
-  // 2. Obtener tree del último commit
   const commitRes = await fetch(`${baseUrl}/git/commits/${latestCommitSha}`, { headers });
   if (!commitRes.ok) throw new Error(`Error al obtener commit: ${commitRes.status}`);
   const commitData = await commitRes.json();
   const baseTreeSha = commitData.tree.sha;
   
-  // 3. Crear blob con contenido comprimido en base64
   const base64Content = contenidoBuffer.toString('base64');
   const blobRes = await fetch(`${baseUrl}/git/blobs`, {
     method: 'POST',
@@ -80,7 +77,6 @@ async function subirAGitHub(contenidoBuffer) {
   }
   const blobData = await blobRes.json();
   
-  // 4. Crear tree nuevo
   const treeRes = await fetch(`${baseUrl}/git/trees`, {
     method: 'POST',
     headers,
@@ -97,7 +93,6 @@ async function subirAGitHub(contenidoBuffer) {
   if (!treeRes.ok) throw new Error(`Error al crear tree: ${treeRes.status}`);
   const treeData = await treeRes.json();
   
-  // 5. Crear commit
   const newCommitRes = await fetch(`${baseUrl}/git/commits`, {
     method: 'POST',
     headers,
@@ -110,7 +105,6 @@ async function subirAGitHub(contenidoBuffer) {
   if (!newCommitRes.ok) throw new Error(`Error al crear commit: ${newCommitRes.status}`);
   const newCommitData = await newCommitRes.json();
   
-  // 6. Actualizar rama
   const updateRefRes = await fetch(`${baseUrl}/git/refs/heads/${BRANCH}`, {
     method: 'PATCH',
     headers,
@@ -160,4 +154,36 @@ export default async function handler(req, res) {
     const sizeOriginal = Buffer.byteLength(json, 'utf-8');
     const compressed = gzipSync(json);
     const sizeCompressed = compressed.length;
-    co
+    const ratio = ((1 - sizeCompressed / sizeOriginal) * 100).toFixed(1);
+    
+    await subirAGitHub(compressed);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Datos actualizados correctamente',
+      stats: {
+        vias: viasFiltradas.length,
+        alt: altFiltrados.length,
+        size_original_mb: (sizeOriginal / 1024 / 1024).toFixed(2),
+        size_compressed_mb: (sizeCompressed / 1024 / 1024).toFixed(2),
+        compression_ratio: `${ratio}%`,
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error en actualizar:', error);
+    return res.status(500).json({
+      error: 'Error al actualizar datos',
+      details: error.message,
+    });
+  }
+}
+
+
+
+
+
+
+
+
+                            
