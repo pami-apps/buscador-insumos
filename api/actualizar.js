@@ -1,25 +1,18 @@
 // ============================================================
-// API: Actualizar datos (solo admin)
+// API: Actualizar datos (solo admin) - con GZIP
 // Endpoint: POST /api/actualizar
 // ============================================================
-// Este endpoint:
-// 1. Valida el JWT de admin
-// 2. Descarga datos del Google Sheet (con API Key del backend)
-// 3. Sube data.json a GitHub usando Git Data API (sin límite de 1MB)
-// NUNCA expone las credenciales al frontend.
-// ============================================================
+
+import { gzipSync } from 'zlib';
 
 const GOOGLE_API_KEY = process.env.GOOGLE_SHEETS_API_KEY;
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const REPO_OWNER = process.env.GITHUB_REPO_OWNER;
 const REPO_NAME = process.env.GITHUB_REPO_NAME;
-const FILE_PATH = 'public/data.json';
+const FILE_PATH = 'public/data.json.gz';
 const BRANCH = 'main';
 
-// ------------------------------------------------------------
-// Validar el JWT del admin
-// ------------------------------------------------------------
 function validarTokenAdmin(token) {
   try {
     const decoded = JSON.parse(Buffer.from(token, 'base64').toString());
@@ -31,9 +24,6 @@ function validarTokenAdmin(token) {
   }
 }
 
-// ------------------------------------------------------------
-// Descargar una hoja del Google Sheet
-// ------------------------------------------------------------
 async function descargarHoja(sheetName, range) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(sheetName)}!${range}?key=${GOOGLE_API_KEY}`;
   const res = await fetch(url);
@@ -54,10 +44,7 @@ async function descargarHoja(sheetName, range) {
   });
 }
 
-// ------------------------------------------------------------
-// Subir a GitHub usando Git Data API (soporta archivos > 1MB)
-// ------------------------------------------------------------
-async function subirAGitHubGitData(data) {
+async function subirAGitHub(contenidoBuffer) {
   const baseUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`;
   const headers = {
     Authorization: `token ${GITHUB_TOKEN}`,
@@ -65,25 +52,25 @@ async function subirAGitHubGitData(data) {
     'Content-Type': 'application/json',
   };
   
-  // 1. Obtener SHA del último commit en la rama
+  // 1. Obtener SHA del último commit
   const refRes = await fetch(`${baseUrl}/git/refs/heads/${BRANCH}`, { headers });
   if (!refRes.ok) throw new Error(`Error al obtener ref: ${refRes.status}`);
   const refData = await refRes.json();
   const latestCommitSha = refData.object.sha;
   
-  // 2. Obtener el tree del último commit
+  // 2. Obtener tree del último commit
   const commitRes = await fetch(`${baseUrl}/git/commits/${latestCommitSha}`, { headers });
   if (!commitRes.ok) throw new Error(`Error al obtener commit: ${commitRes.status}`);
   const commitData = await commitRes.json();
   const baseTreeSha = commitData.tree.sha;
   
-  // 3. Crear un blob con el contenido nuevo
-  const json = JSON.stringify({ ...data, updatedAt: new Date().toISOString() });
+  // 3. Crear blob con contenido comprimido en base64
+  const base64Content = contenidoBuffer.toString('base64');
   const blobRes = await fetch(`${baseUrl}/git/blobs`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
-      content: Buffer.from(json, 'utf-8').toString('base64'),
+      content: base64Content,
       encoding: 'base64',
     }),
   });
@@ -93,7 +80,7 @@ async function subirAGitHubGitData(data) {
   }
   const blobData = await blobRes.json();
   
-  // 4. Crear un tree nuevo con el blob
+  // 4. Crear tree nuevo
   const treeRes = await fetch(`${baseUrl}/git/trees`, {
     method: 'POST',
     headers,
@@ -110,7 +97,7 @@ async function subirAGitHubGitData(data) {
   if (!treeRes.ok) throw new Error(`Error al crear tree: ${treeRes.status}`);
   const treeData = await treeRes.json();
   
-  // 5. Crear el commit
+  // 5. Crear commit
   const newCommitRes = await fetch(`${baseUrl}/git/commits`, {
     method: 'POST',
     headers,
@@ -123,7 +110,7 @@ async function subirAGitHubGitData(data) {
   if (!newCommitRes.ok) throw new Error(`Error al crear commit: ${newCommitRes.status}`);
   const newCommitData = await newCommitRes.json();
   
-  // 6. Actualizar la rama para que apunte al nuevo commit
+  // 6. Actualizar rama
   const updateRefRes = await fetch(`${baseUrl}/git/refs/heads/${BRANCH}`, {
     method: 'PATCH',
     headers,
@@ -140,9 +127,6 @@ async function subirAGitHubGitData(data) {
   return true;
 }
 
-// ------------------------------------------------------------
-// Handler principal
-// ------------------------------------------------------------
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Método no permitido' });
@@ -156,11 +140,9 @@ export default async function handler(req, res) {
   }
   
   try {
-    // 1. Descargar datos del Sheet
     const vias = await descargarHoja('VIAS DE EXCEPCION', 'A:R');
     const alt = await descargarHoja('ALTERNATIVOS', 'A:Z');
     
-    // 2. Filtrar registros vacíos
     const viasFiltradas = vias.filter(r => 
       Object.values(r).some(v => v && v.toString().trim().length > 0)
     );
@@ -171,25 +153,11 @@ export default async function handler(req, res) {
     const datos = {
       vias: viasFiltradas,
       alt: altFiltrados,
+      updatedAt: new Date().toISOString(),
     };
     
-    // 3. Subir a GitHub usando Git Data API
-    await subirAGitHubGitData(datos);
-    
-    return res.status(200).json({
-      success: true,
-      message: 'Datos actualizados correctamente',
-      stats: {
-        vias: viasFiltradas.length,
-        alt: altFiltrados.length,
-      }
-    });
-    
-  } catch (error) {
-    console.error('Error en actualizar:', error);
-    return res.status(500).json({
-      error: 'Error al actualizar datos',
-      details: error.message,
-    });
-  }
-}
+    const json = JSON.stringify(datos);
+    const sizeOriginal = Buffer.byteLength(json, 'utf-8');
+    const compressed = gzipSync(json);
+    const sizeCompressed = compressed.length;
+    co
