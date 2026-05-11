@@ -1,13 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { loadDataFromJSON, loadDataFromSheet, clearCache, getCacheTimestamp } from './dataLoader'
-import { subirDataAGitHub } from './github'
 import { buscar, calcularStats } from './search'
 import styles from './App.module.css'
 
-// ─── CREDENCIALES ─────────────────────────────────────────────────────────────
-const PASSWORD       = '*InsumosAlt2026'
-const ADMIN_USER     = 'administrador'
-const ADMIN_PASSWORD = 'PaPo2716Mat'
+// Descomprimir GZIP
+async function decompressGzip(buffer) {
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(buffer)
+      controller.close()
+    },
+  })
+  const compressedStream = stream.pipeThrough(new DecompressionStream('gzip'))
+  const decompressed = await new Response(compressedStream).arrayBuffer()
+  const text = new TextDecoder().decode(decompressed)
+  return JSON.parse(text)
+}
 
 const PRESTADORES = [
   'Todos',
@@ -40,16 +47,30 @@ function formatDate(val) {
 }
 
 // ─── LOGIN USUARIO ─────────────────────────────────────────────────────────────
-function Login({ onLogin }) {
+function Login({ onLogin, loggingIn }) {
   const [pass, setPass]   = useState('')
   const [error, setError] = useState(false)
   const [shake, setShake] = useState(false)
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
-    if (pass === PASSWORD) {
+    try {
+      const response = await fetch('https://buscador-insumos.vercel.app/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pass }),
+      })
+      if (!response.ok) {
+        setError(true)
+        setShake(true)
+        setTimeout(() => setShake(false), 500)
+        return
+      }
+      const data = await response.json()
+      sessionStorage.setItem('auth', '1')
+      sessionStorage.setItem('userToken', data.token)
       onLogin()
-    } else {
+    } catch (err) {
       setError(true)
       setShake(true)
       setTimeout(() => setShake(false), 500)
@@ -73,11 +94,14 @@ function Login({ onLogin }) {
               onChange={e => { setPass(e.target.value); setError(false) }}
               placeholder="••••••••••••••"
               className={error ? styles.inputError : ''}
+              disabled={loggingIn}
               autoFocus
             />
             {error && <span className={styles.loginError}>Contraseña incorrecta</span>}
           </div>
-          <button type="submit" className={styles.btnLogin}>Ingresar →</button>
+          <button type="submit" className={styles.btnLogin} disabled={loggingIn}>
+            {loggingIn ? 'Ingresando...' : 'Ingresar →'}
+          </button>
         </form>
       </div>
     </div>
@@ -88,20 +112,31 @@ function Login({ onLogin }) {
 function AdminLogin({ onLogin, onClose }) {
   const [user, setUser]   = useState('')
   const [pass, setPass]   = useState('')
-  const [token, setToken] = useState('')
   const [error, setError] = useState('')
   const [shake, setShake] = useState(false)
+  const [loggingIn, setLoggingIn] = useState(false)
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
-    if (user === ADMIN_USER && pass === ADMIN_PASSWORD && token.trim()) {
-      onLogin(token.trim())
-    } else if (user !== ADMIN_USER || pass !== ADMIN_PASSWORD) {
-      setError('Usuario o contraseña incorrectos')
-      setShake(true)
-      setTimeout(() => setShake(false), 500)
-    } else {
-      setError('Ingresá el token de GitHub')
+    setLoggingIn(true)
+    try {
+      const response = await fetch('https://buscador-insumos.vercel.app/api/auth-admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, password: pass }),
+      })
+      if (!response.ok) {
+        setError('Usuario o contraseña incorrectos')
+        setShake(true)
+        setTimeout(() => setShake(false), 500)
+        setLoggingIn(false)
+        return
+      }
+      const data = await response.json()
+      onLogin(data.token)
+    } catch (err) {
+      setError('Error al conectar')
+      setLoggingIn(false)
     }
   }
 
@@ -113,7 +148,7 @@ function AdminLogin({ onLogin, onClose }) {
       >
         <div className={styles.adminHeader}>
           <span>🔐 Ingreso administrador</span>
-          <button className={styles.btnClose} onClick={onClose}>✕</button>
+          <button className={styles.btnClose} onClick={onClose} disabled={loggingIn}>✕</button>
         </div>
         <form onSubmit={handleSubmit} className={styles.loginForm}>
           <div className={styles.loginField}>
@@ -123,6 +158,7 @@ function AdminLogin({ onLogin, onClose }) {
               value={user}
               onChange={e => { setUser(e.target.value); setError('') }}
               placeholder="administrador"
+              disabled={loggingIn}
               autoFocus
             />
           </div>
@@ -133,19 +169,13 @@ function AdminLogin({ onLogin, onClose }) {
               value={pass}
               onChange={e => { setPass(e.target.value); setError('') }}
               placeholder="••••••••••••••"
-            />
-          </div>
-          <div className={styles.loginField}>
-            <label>Token de GitHub <span className={styles.hint}>(ver instrucciones)</span></label>
-            <input
-              type="password"
-              value={token}
-              onChange={e => { setToken(e.target.value); setError('') }}
-              placeholder="ghp_..."
+              disabled={loggingIn}
             />
           </div>
           {error && <span className={styles.loginError}>{error}</span>}
-          <button type="submit" className={styles.btnLogin}>Ingresar como admin →</button>
+          <button type="submit" className={styles.btnLogin} disabled={loggingIn}>
+            {loggingIn ? 'Verificando...' : 'Ingresar como admin →'}
+          </button>
         </form>
       </div>
     </div>
@@ -155,7 +185,7 @@ function AdminLogin({ onLogin, onClose }) {
 // ─── STATS BAR ────────────────────────────────────────────────────────────────
 function StatsBar({ data, color }) {
   if (!data || data.length === 0) return null
-  const precios = data.map(d => parseFloat(d.precio))
+  const precios = data.map(d => parseFloat(d.precio || d.PRECIO || 0))
   const stats   = calcularStats(precios)
   return (
     <div className={styles.statsBar} style={{ '--accent': color }}>
@@ -179,6 +209,12 @@ function TablaResultados({ data, tipo, onSelect }) {
   if (!data) return null
   if (data.length === 0) return <div className={styles.noResults}>Sin coincidencias</div>
 
+  const getNombre = (row) => row.nombre || row.NOMBRE || row.DESCRIPCION || row.descripcion || 'Sin nombre'
+  const getUgl = (row) => row.ugl || row.UGL || row.C_UGL || '—'
+  const getFecha = (row) => row.fecha || row.Fecha || row.F_CAMBIO || ''
+  const getPrecio = (row) => row.precio || row.Precio || row.PRECIO || row.IMPORTE || '0'
+  const getPrestador = (row) => row.prestador || row.PRESTADOR || row.prestador_cod || '—'
+
   return (
     <div className={styles.tableWrap}>
       <table className={styles.table}>
@@ -193,16 +229,14 @@ function TablaResultados({ data, tipo, onSelect }) {
         <tbody>
           {data.map((row, i) => (
             <tr key={i} className={styles.rowClickable} onClick={() => onSelect({ row, tipo })}>
-              <td><span className={styles.uglBadge}>{row.ugl}</span></td>
+              <td><span className={styles.uglBadge}>{getUgl(row)}</span></td>
               <td>
-                <span className={styles.orderBadge}>#{row.orden}</span>
-                <span className={styles.desc}>{row.nombre}</span>
-                {row.proveedor && <span className={styles.sub}>{row.proveedor}</span>}
+                <span className={styles.desc}>{getNombre(row)}</span>
+                {getPrestador(row) && getPrestador(row) !== '—' && <span className={styles.sub}>{getPrestador(row)}</span>}
               </td>
-              <td><span className={styles.price}>{fmt(row.precio)}</span></td>
+              <td><span className={styles.price}>{fmt(getPrecio(row))}</span></td>
               <td>
-                <span className={styles.dateStr}>{formatDate(row.fecha)}</span>
-                <span className={styles.prestador}>{row.prestador}</span>
+                <span className={styles.dateStr}>{formatDate(getFecha(row))}</span>
               </td>
             </tr>
           ))}
@@ -226,32 +260,20 @@ function Ficha({ item, tipo, onClose }) {
 
   const campos = esVias
     ? [
-        { label: 'Código de solicitud',  value: val(row.c_solicitud) },
-        { label: 'Fecha de solicitud',   value: row.fecha ? formatDate(row.fecha) : '—' },
-        { label: 'Tipo de solicitud',    value: val(row.d_tipo_solicitud) },
-        { label: 'Código de insumo',     value: val(row.insumo) },
-        { label: 'Descripción',          value: val(row.nombre), full: true },
-        { label: 'UGL',                  value: val(row.ugl) },
-        { label: 'Código de prestador',  value: val(row.prestador_cod) },
-        { label: 'Prestador',            value: val(row.prestador) },
-        { label: 'Tipo',                 value: val(row.detalle) },
-        { label: 'Sub-Tipo',             value: val(row.detalle_sub) },
-        { label: 'Especificaciones',     value: val(row.espec_tecnicas), full: true },
-        { label: 'Observaciones',        value: val(row.d_observacion), full: true },
-        { label: 'Cantidad',             value: val(row.n_cantidad) },
-        { label: 'Proveedor',            value: val(row.proveedor) },
-        { label: 'Precio',               value: row.precio ? fmt(row.precio) : '—', highlight: true },
+        { label: 'Código de insumo', value: val(row.insumo || row.INSUMO) },
+        { label: 'Descripción', value: val(row.nombre || row.NOMBRE || row.DESCRIPCION), full: true },
+        { label: 'UGL', value: val(row.ugl || row.UGL || row.C_UGL) },
+        { label: 'Prestador', value: val(row.prestador || row.PRESTADOR) },
+        { label: 'Proveedor', value: val(row.proveedor || row.PROVEEDOR) },
+        { label: 'Precio', value: row.precio || row.PRECIO ? fmt(row.precio || row.PRECIO) : '—', highlight: true },
       ]
     : [
-        { label: 'Nro de presupuesto', value: val(row.presupuesto_nro) },
-        { label: 'Fecha',              value: row.fecha ? formatDate(row.fecha) : '—' },
-        { label: 'Afiliado',           value: ((row.nro_afiliado || '') + ' ' + (row.afiliado_nombre || '')).trim() || '—', full: true },
-        { label: 'Nro de OP',          value: val(row.nro_op) },
-        { label: 'Prestador',          value: val(row.prestador), full: true },
-        { label: 'UGL',                value: val(row.ugl) },
-        { label: 'Insumo',             value: val(row.nombre), full: true },
-        { label: 'Cantidad',           value: val(row.unidades) },
-        { label: 'Precio',             value: row.precio ? fmt(row.precio) : '—', highlight: true },
+        { label: 'Presupuesto', value: val(row.presupuesto_nro || row.PRESUPUESTO_NRO) },
+        { label: 'Afiliado', value: val(row.nombre || row.Nombre || row.NOMBRE), full: true },
+        { label: 'Prestador', value: val(row.prestador || row.PRESTADOR), full: true },
+        { label: 'UGL', value: val(row.ugl || row.UGL) },
+        { label: 'Insumo', value: val(row.insumo || row.INSUMO || row.Insumo), full: true },
+        { label: 'Precio', value: row.precio || row.Precio || row.PRECIO || row.IMPORTE ? fmt(row.precio || row.Precio || row.PRECIO || row.IMPORTE) : '—', highlight: true },
       ]
 
   return (
@@ -260,7 +282,6 @@ function Ficha({ item, tipo, onClose }) {
         <button className={styles.btnVolver} onClick={onClose}>← Volver</button>
         <div className={styles.fichaTitleBlock}>
           <h2 className={styles.fichaTitle}>{titulo}</h2>
-          <span className={styles.fichaSub}>{row.nombre}</span>
         </div>
       </div>
       <div className={styles.fichaGrid}>
@@ -281,6 +302,7 @@ function Ficha({ item, tipo, onClose }) {
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 export default function App() {
   const [loggedIn, setLoggedIn]     = useState(() => sessionStorage.getItem('auth') === '1')
+  const [loggingIn, setLoggingIn]   = useState(false)
   const [data, setData]             = useState({ vias: [], alt: [] })
   const [loadState, setLoadState]   = useState('idle')
   const [loadMsg, setLoadMsg]       = useState('')
@@ -292,7 +314,7 @@ export default function App() {
   const [adminToken, setAdminToken]         = useState('')
   const [updating, setUpdating]             = useState(false)
   const [updateMsg, setUpdateMsg]           = useState('')
-  const [updateOk, setUpdateOk]             = useState(null) // true | false | null
+  const [updateOk, setUpdateOk]             = useState(null)
 
   // Search
   const [termino, setTermino]     = useState('')
@@ -307,11 +329,10 @@ export default function App() {
   const terminoRef = useRef(null)
 
   const handleLogin = () => {
-    sessionStorage.setItem('auth', '1')
     setLoggedIn(true)
   }
 
-  // Cargar datos al ingresar (desde data.json)
+  // Cargar datos al ingresar (desde data.json.gz)
   useEffect(() => {
     if (!loggedIn) return
     cargarDatos()
@@ -322,9 +343,15 @@ export default function App() {
     setLoadState('loading')
     setLoadMsg('Cargando datos...')
     try {
-      const result = await loadDataFromJSON()
+      // Descargar data.json.gz desde GitHub
+      const response = await fetch('https://raw.githubusercontent.com/pami-apps/buscador-insumos/main/public/data.json.gz')
+      if (!response.ok) throw new Error('No se pudo descargar data.json.gz')
+      
+      const buffer = await response.arrayBuffer()
+      const result = await decompressGzip(new Uint8Array(buffer))
+      
       setData(result)
-      setCacheTs(getCacheTimestamp())
+      setCacheTs(new Date())
       setLoadState('ready')
       setLoadMsg('')
     } catch (err) {
@@ -334,20 +361,28 @@ export default function App() {
     }
   }, [])
 
-  // Admin: actualizar datos desde el Sheet y subir a GitHub
+  // Admin: actualizar datos
   const handleActualizar = useCallback(async () => {
     setUpdating(true)
-    setUpdateMsg('Descargando datos del Sheet...')
+    setUpdateMsg('Actualizando datos...')
     setUpdateOk(null)
     try {
-      const result = await loadDataFromSheet()
-      setUpdateMsg('Subiendo datos a GitHub...')
-      await subirDataAGitHub(result, adminToken)
-      setData(result)
-      setCacheTs(new Date())
-      setUpdateMsg('✓ Datos actualizados correctamente. Los usuarios verán los datos nuevos al recargar.')
+      const response = await fetch('https://buscador-insumos.vercel.app/api/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminToken}`,
+        },
+        body: '{}',
+      })
+      if (!response.ok) throw new Error(`Error ${response.status}`)
+      
+      const result = await response.json()
+      setUpdateMsg(`✓ Datos actualizados: ${result.stats.vias} vías, ${result.stats.alt} alternativos.`)
       setUpdateOk(true)
-      setLoadState('ready')
+      
+      // Recargar datos locales
+      setTimeout(() => cargarDatos(), 1000)
     } catch (err) {
       console.error(err)
       setUpdateMsg('✗ Error: ' + err.message)
@@ -355,7 +390,7 @@ export default function App() {
     } finally {
       setUpdating(false)
     }
-  }, [adminToken])
+  }, [adminToken, cargarDatos])
 
   const handleAdminLogin = (token) => {
     setAdminToken(token)
@@ -376,7 +411,7 @@ export default function App() {
 
   const handleKeyDown = (e) => { if (e.key === 'Enter') handleSearch() }
 
-  if (!loggedIn) return <Login onLogin={handleLogin} />
+  if (!loggedIn) return <Login onLogin={handleLogin} loggingIn={loggingIn} />
 
   return (
     <div className={styles.app}>
