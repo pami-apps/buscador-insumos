@@ -350,6 +350,13 @@ export default function App() {
       const buffer = await response.arrayBuffer()
       const result = await decompressGzip(new Uint8Array(buffer))
       
+      // 🔍 LOGS DE DIAGNÓSTICO
+      console.log('[CARGA] result keys:', Object.keys(result || {}))
+      console.log('[CARGA] vias:', result?.vias?.length, 'alt:', result?.alt?.length)
+      console.log('[CARGA] primer vias:', result?.vias?.[0])
+      window.__data = result  // para inspección manual en consola
+      // 🔍 FIN LOGS
+      
       setData(result)
       setCacheTs(new Date())
       setLoadState('ready')
@@ -403,8 +410,22 @@ export default function App() {
     const fechaMinima = fecha
       ? (() => { const d = new Date(fecha); d.setHours(0,0,0,0); return d })()
       : null
-    setResVias(buscar(data.vias, termino, fechaMinima, ugl, null))
-    setResAlt(buscar(data.alt, termino, fechaMinima, ugl, prestador))
+    
+    // 🔍 LOGS DE DIAGNÓSTICO
+    console.log('[BUSCAR] término:', termino)
+    console.log('[BUSCAR] data.vias length:', data.vias?.length)
+    console.log('[BUSCAR] data.alt length:', data.alt?.length)
+    console.log('[BUSCAR] es array vias?:', Array.isArray(data.vias))
+    console.log('[BUSCAR] primer vias:', data.vias?.[0])
+    
+    const resV = buscar(data.vias, termino, fechaMinima, ugl, null)
+    const resA = buscar(data.alt, termino, fechaMinima, ugl, prestador)
+    
+    console.log('[BUSCAR] resultados vias:', resV.length, 'alt:', resA.length)
+    // 🔍 FIN LOGS
+    
+    setResVias(resV)
+    setResAlt(resA)
     setSearched(true)
     setItemSel(null)
   }, [termino, fecha, ugl, prestador, data])
