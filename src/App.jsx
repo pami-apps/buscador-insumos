@@ -35,8 +35,25 @@ const PRESTADORES = [
   'SANATORIO GUEMES',
 ]
 
+// Parsea valores tipo "$1.234.567,89" o "1234.56" o números → Number
+function parsePrecio(val) {
+  if (val === null || val === undefined || val === '') return 0
+  if (typeof val === 'number') return val
+  const str = String(val).replace(/\$/g, '').trim()
+  let num
+  if (str.includes(',')) {
+    // Formato argentino: "1.234.567,89" → 1234567.89
+    num = parseFloat(str.replace(/\./g, '').replace(',', '.'))
+  } else {
+    // Formato simple: "1234567" o "1234567.89"
+    num = parseFloat(str.replace(/[^0-9.\-]/g, ''))
+  }
+  return isNaN(num) ? 0 : num
+}
+
 function fmt(num) {
-  return '$' + Number(num).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const n = parsePrecio(num)
+  return '$' + n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 function formatDate(val) {
@@ -48,7 +65,7 @@ function formatDate(val) {
 
 // ─── LOGIN USUARIO ─────────────────────────────────────────────────────────────
 function Login({ onLogin, loggingIn }) {
-  const [pass, setPass]   = useState('')
+  const [pass, setPass] = useState('')
   const [error, setError] = useState(false)
   const [shake, setShake] = useState(false)
 
@@ -60,12 +77,14 @@ function Login({ onLogin, loggingIn }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: pass }),
       })
+
       if (!response.ok) {
         setError(true)
         setShake(true)
         setTimeout(() => setShake(false), 500)
         return
       }
+
       const data = await response.json()
       sessionStorage.setItem('auth', '1')
       sessionStorage.setItem('userToken', data.token)
@@ -110,8 +129,8 @@ function Login({ onLogin, loggingIn }) {
 
 // ─── LOGIN ADMIN ───────────────────────────────────────────────────────────────
 function AdminLogin({ onLogin, onClose }) {
-  const [user, setUser]   = useState('')
-  const [pass, setPass]   = useState('')
+  const [user, setUser] = useState('')
+  const [pass, setPass] = useState('')
   const [error, setError] = useState('')
   const [shake, setShake] = useState(false)
   const [loggingIn, setLoggingIn] = useState(false)
@@ -119,12 +138,14 @@ function AdminLogin({ onLogin, onClose }) {
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoggingIn(true)
+
     try {
       const response = await fetch('https://buscador-insumos.vercel.app/api/auth-admin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user, password: pass }),
       })
+
       if (!response.ok) {
         setError('Usuario o contraseña incorrectos')
         setShake(true)
@@ -132,6 +153,7 @@ function AdminLogin({ onLogin, onClose }) {
         setLoggingIn(false)
         return
       }
+
       const data = await response.json()
       onLogin(data.token)
     } catch (err) {
@@ -185,15 +207,18 @@ function AdminLogin({ onLogin, onClose }) {
 // ─── STATS BAR ────────────────────────────────────────────────────────────────
 function StatsBar({ data, color }) {
   if (!data || data.length === 0) return null
-  const precios = data.map(d => parseFloat(d.precio || d.PRECIO || 0))
-  const stats   = calcularStats(precios)
+
+  // Pasamos los strings crudos a calcularStats (que sabe parsear formato argentino)
+  const precios = data.map(d => d.Precio || d.PRECIO || d.precio || d.IMPORTE || d.IMPORTE_PESOS || 0)
+  const stats = calcularStats(precios)
+
   return (
     <div className={styles.statsBar} style={{ '--accent': color }}>
       {[
-        { label: 'Media',   val: stats.media   },
+        { label: 'Media', val: stats.media },
         { label: 'Mediana', val: stats.mediana },
-        { label: 'Mín',     val: stats.min     },
-        { label: 'Máx',     val: stats.max     },
+        { label: 'Mín', val: stats.min },
+        { label: 'Máx', val: stats.max },
       ].map(s => (
         <div key={s.label} className={styles.statItem}>
           <span className={styles.statVal}>{fmt(s.val)}</span>
@@ -209,10 +234,11 @@ function TablaResultados({ data, tipo, onSelect }) {
   if (!data) return null
   if (data.length === 0) return <div className={styles.noResults}>Sin coincidencias</div>
 
-  const getNombre = (row) => row.nombre || row.NOMBRE || row.DESCRIPCION || row.descripcion || 'Sin nombre'
+  // NOMBRE_NORMALIZADO es el campo de alternativos; DESCRIPCION para vías
+  const getNombre = (row) => row.NOMBRE_NORMALIZADO || row.DESCRIPCION || row.INSUMO || row.nombre || row.NOMBRE || row.descripcion || 'Sin nombre'
   const getUgl = (row) => row.ugl || row.UGL || row.C_UGL || '—'
-  const getFecha = (row) => row.fecha || row.Fecha || row.F_CAMBIO || ''
-  const getPrecio = (row) => row.precio || row.Precio || row.PRECIO || row.IMPORTE || '0'
+  const getFecha = (row) => row.fecha || row.Fecha || row.F_CAMBIO || row.F_SOLICITUD || ''
+  const getPrecio = (row) => row.Precio || row.PRECIO || row.precio || row.IMPORTE || row.IMPORTE_PESOS || '0'
   const getPrestador = (row) => row.prestador || row.PRESTADOR || row.prestador_cod || '—'
 
   return (
@@ -260,20 +286,23 @@ function Ficha({ item, tipo, onClose }) {
 
   const campos = esVias
     ? [
-        { label: 'Código de insumo', value: val(row.insumo || row.INSUMO) },
-        { label: 'Descripción', value: val(row.nombre || row.NOMBRE || row.DESCRIPCION), full: true },
-        { label: 'UGL', value: val(row.ugl || row.UGL || row.C_UGL) },
-        { label: 'Prestador', value: val(row.prestador || row.PRESTADOR) },
-        { label: 'Proveedor', value: val(row.proveedor || row.PROVEEDOR) },
-        { label: 'Precio', value: row.precio || row.PRECIO ? fmt(row.precio || row.PRECIO) : '—', highlight: true },
+        { label: 'Código de insumo', value: val(row.INSUMO || row.insumo) },
+        { label: 'Descripción', value: val(row.DESCRIPCION || row.nombre || row.NOMBRE), full: true },
+        { label: 'UGL', value: val(row.C_UGL || row.ugl || row.UGL) },
+        { label: 'Prestador', value: val(row.PRESTADOR || row.DETALLE_PRESTADOR || row.prestador) },
+        { label: 'Proveedor', value: val(row.PROVEEDOR || row.proveedor) },
+        { label: 'Fecha', value: val(formatDate(row.F_CAMBIO || row.F_SOLICITUD)) },
+        { label: 'Precio', value: (row.PRECIO || row.precio) ? fmt(row.PRECIO || row.precio) : '—', highlight: true },
       ]
     : [
-        { label: 'Presupuesto', value: val(row.presupuesto_nro || row.PRESUPUESTO_NRO) },
-        { label: 'Afiliado', value: val(row.nombre || row.Nombre || row.NOMBRE), full: true },
-        { label: 'Prestador', value: val(row.prestador || row.PRESTADOR), full: true },
-        { label: 'UGL', value: val(row.ugl || row.UGL) },
-        { label: 'Insumo', value: val(row.insumo || row.INSUMO || row.Insumo), full: true },
-        { label: 'Precio', value: row.precio || row.Precio || row.PRECIO || row.IMPORTE ? fmt(row.precio || row.Precio || row.PRECIO || row.IMPORTE) : '—', highlight: true },
+        { label: 'Presupuesto N°', value: val(row['PRESUPUESTO NRO'] || row.presupuesto_nro || row.PRESUPUESTO_NRO) },
+        { label: 'Afiliado', value: val(row.Nombre || row.nombre || row.NOMBRE), full: true },
+        { label: 'Prestador', value: val(row.PRESTADOR || row.prestador), full: true },
+        { label: 'UGL', value: val(row.UGL || row.ugl) },
+        { label: 'Insumo', value: val(row.NOMBRE_NORMALIZADO || row.INSUMO || row.insumo || row.Insumo), full: true },
+        { label: 'Fecha', value: val(formatDate(row.Fecha || row.fecha)) },
+        { label: 'Unidades', value: val(row.unidades) },
+        { label: 'Precio', value: (row.Precio || row.PRECIO || row.IMPORTE) ? fmt(row.Precio || row.PRECIO || row.IMPORTE) : '—', highlight: true },
       ]
 
   return (
@@ -284,6 +313,7 @@ function Ficha({ item, tipo, onClose }) {
           <h2 className={styles.fichaTitle}>{titulo}</h2>
         </div>
       </div>
+
       <div className={styles.fichaGrid}>
         {campos.map((c, i) => (
           <div
@@ -301,31 +331,30 @@ function Ficha({ item, tipo, onClose }) {
 
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 export default function App() {
-  const [loggedIn, setLoggedIn]     = useState(() => sessionStorage.getItem('auth') === '1')
-  const [loggingIn, setLoggingIn]   = useState(false)
-  const [data, setData]             = useState({ vias: [], alt: [] })
-  const [loadState, setLoadState]   = useState('idle')
-  const [loadMsg, setLoadMsg]       = useState('')
-  const [cacheTs, setCacheTs]       = useState(null)
+  const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem('auth') === '1')
+  const [loggingIn, setLoggingIn] = useState(false)
+  const [data, setData] = useState({ vias: [], alt: [] })
+  const [loadState, setLoadState] = useState('idle')
+  const [loadMsg, setLoadMsg] = useState('')
+  const [cacheTs, setCacheTs] = useState(null)
 
   // Admin
   const [showAdminLogin, setShowAdminLogin] = useState(false)
-  const [isAdmin, setIsAdmin]               = useState(false)
-  const [adminToken, setAdminToken]         = useState('')
-  const [updating, setUpdating]             = useState(false)
-  const [updateMsg, setUpdateMsg]           = useState('')
-  const [updateOk, setUpdateOk]             = useState(null)
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [adminToken, setAdminToken] = useState('')
+  const [updating, setUpdating] = useState(false)
+  const [updateMsg, setUpdateMsg] = useState('')
+  const [updateOk, setUpdateOk] = useState(null)
 
   // Search
-  const [termino, setTermino]     = useState('')
-  const [fecha, setFecha]         = useState('')
-  const [ugl, setUgl]             = useState('')
+  const [termino, setTermino] = useState('')
+  const [fecha, setFecha] = useState('')
+  const [ugl, setUgl] = useState('')
   const [prestador, setPrestador] = useState('Todos')
-  const [resVias, setResVias]     = useState(null)
-  const [resAlt, setResAlt]       = useState(null)
-  const [searched, setSearched]   = useState(false)
-  const [itemSel, setItemSel]     = useState(null)
-
+  const [resVias, setResVias] = useState(null)
+  const [resAlt, setResAlt] = useState(null)
+  const [searched, setSearched] = useState(false)
+  const [itemSel, setItemSel] = useState(null)
   const terminoRef = useRef(null)
 
   const handleLogin = () => {
@@ -342,21 +371,17 @@ export default function App() {
   const cargarDatos = useCallback(async () => {
     setLoadState('loading')
     setLoadMsg('Cargando datos...')
+
     try {
       // Descargar data.json.gz desde GitHub
       const response = await fetch('https://raw.githubusercontent.com/pami-apps/buscador-insumos/main/public/data.json.gz')
       if (!response.ok) throw new Error('No se pudo descargar data.json.gz')
-      
+
       const buffer = await response.arrayBuffer()
       const result = await decompressGzip(new Uint8Array(buffer))
-      
-      // 🔍 LOGS DE DIAGNÓSTICO
-      console.log('[CARGA] result keys:', Object.keys(result || {}))
-      console.log('[CARGA] vias:', result?.vias?.length, 'alt:', result?.alt?.length)
-      console.log('[CARGA] primer vias:', result?.vias?.[0])
-      window.__data = result  // para inspección manual en consola
-      // 🔍 FIN LOGS
-      
+
+      window.__data = result // para inspección manual en consola
+
       setData(result)
       setCacheTs(new Date())
       setLoadState('ready')
@@ -373,6 +398,7 @@ export default function App() {
     setUpdating(true)
     setUpdateMsg('Actualizando datos...')
     setUpdateOk(null)
+
     try {
       const response = await fetch('https://buscador-insumos.vercel.app/api/update', {
         method: 'POST',
@@ -382,12 +408,13 @@ export default function App() {
         },
         body: '{}',
       })
+
       if (!response.ok) throw new Error(`Error ${response.status}`)
-      
+
       const result = await response.json()
       setUpdateMsg(`✓ Datos actualizados: ${result.stats.vias} vías, ${result.stats.alt} alternativos.`)
       setUpdateOk(true)
-      
+
       // Recargar datos locales
       setTimeout(() => cargarDatos(), 1000)
     } catch (err) {
@@ -407,23 +434,14 @@ export default function App() {
 
   const handleSearch = useCallback(() => {
     if (!termino.trim()) return
+
     const fechaMinima = fecha
       ? (() => { const d = new Date(fecha); d.setHours(0,0,0,0); return d })()
       : null
-    
-    // 🔍 LOGS DE DIAGNÓSTICO
-    console.log('[BUSCAR] término:', termino)
-    console.log('[BUSCAR] data.vias length:', data.vias?.length)
-    console.log('[BUSCAR] data.alt length:', data.alt?.length)
-    console.log('[BUSCAR] es array vias?:', Array.isArray(data.vias))
-    console.log('[BUSCAR] primer vias:', data.vias?.[0])
-    
+
     const resV = buscar(data.vias, termino, fechaMinima, ugl, null)
     const resA = buscar(data.alt, termino, fechaMinima, ugl, prestador)
-    
-    console.log('[BUSCAR] resultados vias:', resV.length, 'alt:', resA.length)
-    // 🔍 FIN LOGS
-    
+
     setResVias(resV)
     setResAlt(resA)
     setSearched(true)
@@ -436,7 +454,6 @@ export default function App() {
 
   return (
     <div className={styles.app}>
-
       {/* MODAL ADMIN LOGIN */}
       {showAdminLogin && (
         <AdminLogin
@@ -522,6 +539,7 @@ export default function App() {
             disabled={loadState !== 'ready'}
           />
         </div>
+
         <div className={`${styles.inputGroup} ${styles.gUgl}`}>
           <label>UGL</label>
           <input
@@ -533,6 +551,7 @@ export default function App() {
             disabled={loadState !== 'ready'}
           />
         </div>
+
         <div className={`${styles.inputGroup} ${styles.gDate}`}>
           <label>Fecha mín.</label>
           <input
@@ -542,6 +561,7 @@ export default function App() {
             disabled={loadState !== 'ready'}
           />
         </div>
+
         <div className={`${styles.inputGroup} ${styles.gPrest}`}>
           <label>Prestador <span className={styles.hint}>(solo Alt.)</span></label>
           <select
@@ -552,6 +572,7 @@ export default function App() {
             {PRESTADORES.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         </div>
+
         <button
           className={styles.btnSearch}
           onClick={handleSearch}
