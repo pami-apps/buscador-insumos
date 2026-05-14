@@ -1,10 +1,16 @@
 // ============================================================
 // MOTOR DE BÚSQUEDA - AND + Fuzzy Matching
 // ============================================================
+// Busca en campos de descripción del INSUMO (no del afiliado).
+//
+// VIAS DE EXCEPCION: DESCRIPCION, INSUMO, PRESTADOR, PROVEEDOR,
+//   DETALLE, DETALLE_SUB, D_TIPO_SOLICITUD, ESPEC_TECNICAS, D_OBSERVACION
+// ALTERNATIVOS: NOMBRE_NORMALIZADO, INSUMO (si existe), PRESTADOR
+// ============================================================
+
 const FUZZY_THRESHOLD = 0.70
 
 function levenshteinDistance(a, b) {
-  // Guarda: forzar strings
   a = String(a ?? '')
   b = String(b ?? '')
   const m = a.length
@@ -12,8 +18,6 @@ function levenshteinDistance(a, b) {
   if (m === 0) return n
   if (n === 0) return m
 
-  // dp tiene (m+1) filas y (n+1) columnas
-  // dp[i][j] = distancia entre a[0..i] y b[0..j]
   const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0))
 
   for (let i = 0; i <= m; i++) dp[i][0] = i
@@ -70,23 +74,30 @@ export function buscar(datos, termino, fechaMinima = null, ugl = '', prestador =
       if (!rowUgl.includes(ugl)) return false
     }
 
-    // 3. Filtro por Prestador (solo para ALT)
+    // 3. Filtro por Prestador (solo aplica a ALT)
     if (prestador && prestador !== 'Todos') {
       const rowPrestador = (row.prestador || row.PRESTADOR || '').toString().toLowerCase()
       if (!rowPrestador.includes(prestador.toLowerCase())) return false
     }
 
-    // 4. Búsqueda de texto
+    // 4. Búsqueda de texto en campos de descripción del INSUMO
+    // ⚠️ NO se incluye row.Nombre (afiliado en ALT) para evitar falsos positivos
     const campos = [
-      row.nombre || row.NOMBRE || row.DESCRIPCION || row.descripcion || '',
-      row.insumo || row.INSUMO || '',
-      row.proveedor || row.PROVEEDOR || '',
-      row.prestador || row.PRESTADOR || '',
-      row.detalle || row.DETALLE || '',
-      row.detalle_sub || row.DETALLE_SUB || '',
-      row.d_tipo_solicitud || row.D_TIPO_SOLICITUD || '',
-      row.espec_tecnicas || row.ESPEC_TECNICAS || '',
-      row.d_observacion || row.D_OBSERVACION || '',
+      // Descripción principal del insumo
+      row.NOMBRE_NORMALIZADO || '',                  // ALT
+      row.DESCRIPCION || row.descripcion || '',      // VIAS
+      // Insumo (algunas filas viejas de ALT lo tenían)
+      row.INSUMO || row.insumo || row.Insumo || '',
+      // Prestador / proveedor
+      row.PRESTADOR || row.prestador || '',
+      row.DETALLE_PRESTADOR || '',                   // VIAS
+      row.PROVEEDOR || row.proveedor || '',          // VIAS
+      // Detalle / observaciones (VIAS)
+      row.DETALLE || row.detalle || '',
+      row.DETALLE_SUB || row.detalle_sub || '',
+      row.D_TIPO_SOLICITUD || row.d_tipo_solicitud || '',
+      row.ESPEC_TECNICAS || row.espec_tecnicas || '',
+      row.D_OBSERVACION || row.d_observacion || '',
     ]
     const textoCompleto = campos.map(c => String(c ?? '')).join(' ').toLowerCase()
 
@@ -121,6 +132,7 @@ export function calcularStats(precios) {
       const str = String(p ?? '').replace(/\$/g, '').trim()
       let num
       if (str.includes(',')) {
+        // Formato argentino: "1.234.567,89" → 1234567.89
         num = parseFloat(str.replace(/\./g, '').replace(',', '.'))
       } else {
         num = parseFloat(str.replace(/[^0-9.]/g, ''))
