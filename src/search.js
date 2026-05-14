@@ -80,24 +80,15 @@ export function buscar(datos, termino, fechaMinima = null, ugl = '', prestador =
       if (!rowPrestador.includes(prestador.toLowerCase())) return false
     }
 
-    // 4. Búsqueda de texto en campos de descripción del INSUMO
-    // ⚠️ NO se incluye row.Nombre (afiliado en ALT) para evitar falsos positivos
+    // 4. Búsqueda SOLO en el campo de descripción del insumo
+    // VIAS: campo DESCRIPCION
+    // ALT:  campo NOMBRE_NORMALIZADO
+    // No se busca en observaciones, detalles, prestador, etc.
+    // para evitar falsos positivos (ej: guia hidrofilica que menciona
+    // "cateter" en sus especificaciones técnicas)
     const campos = [
-      // Descripción principal del insumo
-      row.NOMBRE_NORMALIZADO || '',                  // ALT
       row.DESCRIPCION || row.descripcion || '',      // VIAS
-      // Insumo (algunas filas viejas de ALT lo tenían)
-      row.INSUMO || row.insumo || row.Insumo || '',
-      // Prestador / proveedor
-      row.PRESTADOR || row.prestador || '',
-      row.DETALLE_PRESTADOR || '',                   // VIAS
-      row.PROVEEDOR || row.proveedor || '',          // VIAS
-      // Detalle / observaciones (VIAS)
-      row.DETALLE || row.detalle || '',
-      row.DETALLE_SUB || row.detalle_sub || '',
-      row.D_TIPO_SOLICITUD || row.d_tipo_solicitud || '',
-      row.ESPEC_TECNICAS || row.espec_tecnicas || '',
-      row.D_OBSERVACION || row.d_observacion || '',
+      row.NOMBRE_NORMALIZADO || '',                  // ALT
     ]
     const textoCompleto = campos.map(c => String(c ?? '')).join(' ').toLowerCase()
 
